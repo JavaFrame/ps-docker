@@ -1,0 +1,10 @@
+@startuml Activity Diagram - Run Container
+start
+:Invoke-Container Command is executed;
+:Container is pulled;
+:invoke "unsare" (and create the new namespace);
+:mount Standard fs (like /proc, /tmp, ...);
+:set Environement variabels from the container;
+:execute given application in container (like bash);
+end
+@enduml
