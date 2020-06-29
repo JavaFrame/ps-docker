@@ -33,7 +33,7 @@ function Write-Settings([Settings] $settingsObj, [string] $path = "~/.config/ps-
     }
 }
 
-$script:globalSettings = Read-Settings
+#$script:globalSettings = Read-Settings
 
 $script:dockerAuthUrl = "https://auth.docker.io/token";
 
@@ -41,10 +41,19 @@ $script:dockerAuthUrl = "https://auth.docker.io/token";
 Docker Api
 #>
 
-class Container {
-    
+class ContainerConfig {
+    [ContainerDef]$definition
+    [ContainerManifest]$manifest
+    [string[]]$env
+    [string[]]$entrypoint
+    [string[]]$cmd
 }
 
+class ContainerManifest {
+    [ContainerDef]$definition
+    [string[]]$layers
+    [string]$configLayer
+}
 
 class ContainerDef {
     [string]$registryUrl = "registry-1.docker.io"
@@ -54,6 +63,7 @@ class ContainerDef {
 }
 
 <#
+.DESCRIPTION
 Parses a docker image reference string (like ubuntu:latest or seppli/lewebseite:1.0) and 
 returns a ContainerDef object. The registry is currently always "registry-1.docker.io" and can't
 be changed (so custom-registry.ch/ubuntu:latest wouldn't work)
@@ -79,27 +89,132 @@ function ConvertTo-ContainerDef([string] $dockerDef) {
     return $obj;
 }
 
+<#
+.DESCRIPTION
+Gets an auth token for the given scope and the given container definition.
+The token is (currently) only useable for the official docker registry (e.g. registry.docker.io)
+
+.OUTPUTS
+System.String. The token
+#>
 function Get-AuthToken([ContainerDef] $def, [string]$scope="pull") {
     $response = Invoke-RestMethod "$dockerAuthUrl`?service=registry.docker.io&scope=repository:$($def.library)/$($def.image):$scope"
     return $response.token
 }
 
-function Get-AuthHeaderObj([ContainerDef] $def, [string]$scope="pull") {
-    $token = Get-AuthToken $def
-    return @{ "Authorization" = "Bearer $token" }
+<#
+.DESCRIPTION
+Creates a hashtable with the authorization and accept header. The $type parameter is used as the accept header's value.
+The container definition and the $scope parmeter are used to feed the Get-AuthToken function and get a token 
+
+.OUTPUTS
+[hashtable] the hashtable with the described headers
+#>
+function Get-AuthHeaderObj([ContainerDef] $def, [string]$scope="pull", [string] $type = "application/vnd.docker.distribution.manifest.v2+json") {
+    $token = Get-AuthToken $def $scope
+    return @{ "Authorization" = "Bearer $token"; "Accept" = $type} 
 }
 
+<#
+.DESCRIPTION
+Fetches the manifest of a given Container Definition and fills it into an ContainerManifest class, which 
+is returend
+
+.OUTPUTS
+ContainerManifest. An object of the type ContainerManifest with the manifest from the given ContainerDef
+#>
 function Get-Manifest([ContainerDef] $def) {
+    [OutputType([ContainerManifest])]
     $headers = Get-AuthHeaderObj $def
-    return Invoke-RestMethod "https://$($def.registryUrl)/v2/$($def.library)/$($def.image)/manifests/$($def.tag)" -Headers $headers
+    $obj = Invoke-RestMethod "https://$($def.registryUrl)/v2/$($def.library)/$($def.image)/manifests/$($def.tag)" -Headers $headers
+    $manifest = [ContainerManifest]::new()
+    $manifest.definition = $def
+    $manifest.layers = $obj.layers | % digest
+    $manifest.configLayer = $obj.config.digest
+    return $manifest
 }
 
-function Get-Layer([ContainerDef] $def, [string] $shaLayer) {
+<#
+.DESCRIPTION
+Downloads and saves the layer with the given sha value from the given ContainerDef and
+saves it to the given $path
+#>
+function Save-Layer([ContainerDef] $def, [string] $shaLayer, [string] $path) {
     $url = "https://$($def.registryUrl)/v2/$($def.library)/$($def.image)/blobs/$shaLayer"
     $headers = Get-AuthHeaderObj $def
-    Invoke-WebRequest $url -Headers $headers
+    Invoke-WebRequest $url -Headers $headers -OutFile $path -UseBasicParsing
 }
 
-function Pull-Container([string] $name) {
+<#
+.DESCRIPTION
+Downloads the config from the given ContainerDef and ContainerManifest and saves it into a ContainerConfig
 
+.OUTPUTS
+ContainerConfig. A ContainerConfig object with the received values
+#>
+function Get-ContainerConfig([ContainerDef] $def, [ContainerManifest] $manifest) {
+    $url = "https://$($def.registryUrl)/v2/$($def.library)/$($def.image)/blobs/$($manifest.configLayer)"
+    $headers = Get-AuthHeaderObj $def
+    $response = Invoke-RestMethod $url -Headers $headers
+    $config = [ContainerConfig]::new()
+    $config.definition = $def
+    $config.manifest = $manifest
+    $config.entrypoint = $response.config.Entrypoint
+    $config.cmd = $response.config.Cmd
+    $config.env = $response.config.Env
+    return $config
+}
+
+<#
+.DESCRIPTION
+Gets the folder where the layers of a container should be stored.
+The folder path is generated and then created if it doesn't already exist.
+The returned folder doesn't have to be empty, but it can
+
+.OUTPUTS
+System.String. The path to the container folder
+#>
+function Get-ContainerFolder([ContainerDef] $def) {
+    #$tempFolderPath = "/tmp/$(New-Guid)"
+    $tempFolderPath = "./$($def.image):$($def.tag)-$(New-Guid)"
+    New-Item -Type Directory $tempFolderPath | Out-Null
+    return $tempFolderPath
+}
+
+<#
+.DESCRIPTION
+Tries to download the given image and run it
+
+.PARAMETER defStr
+A container definition, like "ubuntu:latest", "library/ubuntu" or just "ubuntu"
+
+.PARAMETER command
+The command which should be executed. If empty, the command from the container config is executed
+
+#>
+function Invoke-Container {
+    [CmdletBinding()]
+    Param(
+        [Parameter(Mandatory=$true)]
+        [string] $defStr,
+        [string] $command=$null
+    )
+    $containerDef = ConvertTo-ContainerDef $defStr
+    # fetch manifest
+    $manifest = Get-Manifest $containerDef
+    
+    # get or create folder for container
+    $containerPath = Get-ContainerFolder $containerDef
+    Write-Host "Download container $defStr to $containerPath"
+
+    # extract all layers from the manifest to pull them
+    $layers = $manifest.layers
+    foreach ($layer in $layers) {
+        $layerLocation = "$containerPath/$layer.tar"
+        echo "Download layer $layer"
+        Save-Layer $containerDef $layer $layerLocation
+    }
+
+    # get container config
+    $containerConfig = Get-ContainerConfig $containerDef $manifest
 }
