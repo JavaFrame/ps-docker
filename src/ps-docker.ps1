@@ -236,10 +236,18 @@ function ConvertTo-EscapedOverlayFsParameter([string]$path) {
 }
 
 <#
-.DESCRIPTION
+.SYNOPSIS 
 Tries to download the given image and run it
 
-.PARAMETER 
+.DESCRIPTION
+Tries to download the given image, extract the layers, and then run the given command or the predefined command if the
+command parameter is empty
+
+.PARAMETER runUnprivileged
+Unshare is executed without sudo
+
+.PARAMETER runInBackground
+The stopContainer.sh script isn't automaticly executed at the end
 
 .PARAMETER defStr
 A container definition, like "ubuntu:latest", "library/ubuntu" or just "ubuntu"
@@ -247,6 +255,19 @@ A container definition, like "ubuntu:latest", "library/ubuntu" or just "ubuntu"
 .PARAMETER command
 The command which should be executed. If empty, the command from the container config is executed
 
+.INPUTS
+None. You cannot pipe object to Invoke-Container
+
+.OUTPUTS
+The status updates printed for the user
+
+.EXAMPLE
+"Invoke-Container -runUnprivileged ubuntu:18.04" downloads the ubuntu 18.04 docker image and runs the
+in the container predefined command.
+
+.EXAMPLE
+With "Invoke-Container -runUnprivileged ubuntu:18.04 echo hi" the image will be downloaded and instead of the
+predefined command, "echo hi" will be run
 #>
 function Invoke-Container {
     [CmdletBinding()]
