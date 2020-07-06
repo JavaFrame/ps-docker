@@ -8,3 +8,46 @@ start
 :execute given application in container (like bash);
 end
 @enduml
+
+@startuml Activity Diagram - Run Container - Detailed
+start
+partition "Download Docker Container" {
+    :Invoke-Container Command is executed;
+    :Parse container definition to ContainerDefinition object;
+    :Download container manifest;
+    :Download Layers;
+}
+
+partition "Run Container" {
+    :Generate start command from container entrypoint and command;
+    :untar layers;
+    :Create container folder structure;
+    :mount rootfs;
+
+    partition "Generate Bootstrap Script" {
+        :generate mounting code for /proc, /sys and /tmp;
+        :generate environement variables;
+        :generate chroot command;
+        :write boostrapScript.sh script to disk;
+    }
+
+    partition "Generate Stop Script" {
+        :generate umount rootfs;
+        :delete docker folder;
+        :write stopScript.sh script to disk;
+    }
+
+    if(run unprivliged enabled) then
+        :run unshare command unprivliged;
+    else 
+        :chown container to root:root;
+        :run unshare command with sudo;
+    endif
+    if(run in background enabled) then
+        :print info message;
+    else
+        :execute stopScript.sh to cleanup;
+    endif
+}
+stop
+@enduml
