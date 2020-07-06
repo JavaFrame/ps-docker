@@ -4,12 +4,22 @@ Version: 0.1
 Authors: Sebastian Zumbrunn
 #>
 
-$script:dockerAuthUrl = "https://auth.docker.io/token";
-
 <#
 Docker Api
 #>
 
+<#
+.DESCRIPTION 
+The url where the jwt tokens should be requested from
+#>
+$script:dockerAuthUrl = "https://auth.docker.io/token";
+
+<#
+.DESCRIPTION
+A class which contains the ContainerDef, ContainerManifest and 
+metadata, like the command, entrypoint and environmenet variable.
+The metadata are only those which are actually needed for the current functionality.
+#>
 class ContainerConfig {
     [ContainerDef]$definition
     [ContainerManifest]$manifest
@@ -18,12 +28,24 @@ class ContainerConfig {
     [string[]]$cmd
 }
 
+<#
+.DESCRIPTION
+Contains the container definition of the manifest, the sha digest string of the file system
+layers and the config layer
+#>
 class ContainerManifest {
     [ContainerDef]$definition
     [string[]]$layers
     [string]$configLayer
 }
 
+<#
+The structured form of a container defintion (like library/ubuntu:latest).
+It can be created from the ConvertTo-ContainerDef command which parses
+a string
+
+The ToString method will convert the class back into the string representation
+#>
 class ContainerDef {
     [string]$registryUrl = "registry-1.docker.io"
     [string]$library = "library"
@@ -139,6 +161,10 @@ function Get-ContainerConfig([ContainerDef] $def, [ContainerManifest] $manifest)
     $config.env = $response.config.Env
     return $config
 }
+
+
+
+<# Container startup code #>
 
 <#
 .DESCRIPTION
@@ -315,12 +341,12 @@ function Invoke-Container {
     # unshare bootstrap script
     if($runUnprivileged) {
         echo "Bootstraping Container with unpriviliged user"
-        unshare --keep-caps --setgroups allow --mount --uts --ipc --pid --fork --map-root-user bash `"$bootstrapScriptPath`"
+        unshare --mount --net --uts --ipc --pid --fork --user --map-root-user bash `"$bootstrapScriptPath`"
     } else {
         sudo chown -R root:root "$containerPath"
 
         echo "Bootstraping Container with priviliged user"
-        sudo unshare --mount --uts --ipc --pid --fork --map-root-user bash `"$bootstrapScriptPath`"
+        sudo unshare --mount --net --uts --ipc --pid --fork --map-root-user bash `"$bootstrapScriptPath`"
     }
 
     if(-not $runInBackground) {
